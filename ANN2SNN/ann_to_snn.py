@@ -11,9 +11,6 @@ from nxsdk_modules_ncl.dnn.composable.composable_dnn import ComposableDNN as DNN
 from nxsdk_modules_ncl.input_generator.input_generator import InputGenerator
 from nxsdk.composable.model import Model as NxSystemModel
 
-# from stable_baselines3 import PPO
-# from spiking_ppo.snn4ppo import CustomActorCriticPolicy
-
 def is_feedforward(model):
     return all(isinstance(layer, Dense) for layer in model.layers if hasattr(layer, 'weights'))
 
@@ -25,12 +22,8 @@ def is_ppo_policy(model):
         return False
 
 # Load PPO model and extract policy
-def load_ppo_model(model, network_size=64):
-    # model = PPO.load(model_path.format(network_size),
-    #                  custom_objects=dict(policy_class=CustomActorCriticPolicy))
-    
+def load_ppo_model(model):    
     policy = model.policy
-                
     return policy
     
 def get_combined_linear_sizes(policy):
@@ -262,9 +255,6 @@ def run_snn(snn_system, dnn, input_generator, dummy_inputs, num_steps_per_sample
     """Run the SNN model with support for mini-batch inference, benchmark execution time, and log results."""
     
     tStart = time.time()  # Start time logging
-    # snn_system.compile()
-    # snn_system.start(snn_system.board)
-    # tEndBoot = time.time()  # Time after boot
     
     snn_system.run(num_steps_per_sample * num_samples, aSync=True)
 
@@ -272,7 +262,6 @@ def run_snn(snn_system, dnn, input_generator, dummy_inputs, num_steps_per_sample
     tStartInput = time.time()  # Time before input encoding
     
     if batch_mode:
-        # scaled_inputs = (dummy_inputs * 255).astype(int)
         int_inputs = dummy_inputs.astype(int)
         
         num_batches = int(np.ceil(num_samples / batch_size))  # Number of batches needed
@@ -287,7 +276,6 @@ def run_snn(snn_system, dnn, input_generator, dummy_inputs, num_steps_per_sample
 
     else:
         for i, sample in enumerate(dummy_inputs):
-            # scaled_sample = (sample * 255).astype(int)
             int_inputs = sample.astype(int)
             input_generator.encode(int_inputs)  # Process one input at a time
             
@@ -300,12 +288,9 @@ def run_snn(snn_system, dnn, input_generator, dummy_inputs, num_steps_per_sample
     snn_system.finishRun()
     snn_system.board.disconnect()
     
-
-
     # Print benchmark results
     if print_summary:
         # Compute execution times
-        # boot_time = tEndBoot - tStart
         input_encoding_time = tEndInput - tStartInput
         classification_time = tEndClassification - tStartClassification
         total_execution_time = tEndClassification - tStart
@@ -314,7 +299,6 @@ def run_snn(snn_system, dnn, input_generator, dummy_inputs, num_steps_per_sample
         print(f"Batch Size: {batch_size if batch_mode else 'N/A'}")
         print(f"Num Steps per Sample: {num_steps_per_sample}")
         print(f"Num Samples: {num_samples}")
-        # print(f"Boot Time: {boot_time:.4f} seconds")
         print(f"Input Encoding Time: {input_encoding_time:.4f} seconds")
         print(f"Classification Time: {classification_time:.4f} seconds")
         print(f"Total Execution Time: {total_execution_time:.4f} seconds")
@@ -343,7 +327,6 @@ class SNNConverter:
 
     def __init__(self, ann_model, 
                  num_steps_per_sample=1024,
-                #  input_generator_interval=1024,
                  vth_mant=2**9,
                  bias_exp=6,
                  weight_exponent=0,
