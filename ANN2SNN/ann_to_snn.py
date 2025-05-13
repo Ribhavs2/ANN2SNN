@@ -380,7 +380,7 @@ def transfer_ann_weights_to_snn_PPO(policy, snn_model, weight_bits=8):
     print(f"Transferred {len(parameters_int)//2} layers to SNN (weights + biases).")
     snn_model.set_weights(parameters_int)
     
-def create_snn_system(snn_model, input_size, num_steps_per_sample, input_generator_interval, bias_exp=6):
+def create_snn_system(snn_model, input_shape, num_steps_per_sample, input_generator_interval, bias_exp=6):
     """
     Create the full SNN system with input generator and composable DNN.
     
@@ -397,8 +397,13 @@ def create_snn_system(snn_model, input_size, num_steps_per_sample, input_generat
             - The ComposableDNN object.
             - The InputGenerator object.
     """
+    print("Creating SNN system with Input Generator...")
+
+    flat_input_size = int(np.prod(input_shape))
+    print(f"  Original input shape: {input_shape}, Flattened size for InputGenerator: {flat_input_size}")
+    
     dnn = DNN(model=snn_model, num_steps_per_img=num_steps_per_sample)
-    input_generator = InputGenerator(shape=(input_size,), interval=input_generator_interval)
+    input_generator = InputGenerator(shape=(flat_input_size,), interval=input_generator_interval)
     input_generator.setBiasExp(bias_exp)
     
     snn_system = NxSystemModel("snn_inference")
@@ -406,100 +411,111 @@ def create_snn_system(snn_model, input_size, num_steps_per_sample, input_generat
     snn_system.add(input_generator)
     input_generator.connect(dnn)
     
+    print("  SNN system created and connected.")
+    
     return snn_system, dnn, input_generator
 
-def convert_ann_to_snn_system(ann_model, 
-                              num_steps_per_sample=1024, 
-                              input_generator_interval=1024,
-                              vth_mant=2**9, 
-                              bias_exp=6, 
-                              weight_exponent=0,
-                              synapse_encoding='sparse',
-                              weight_bits=8):
-    """
-    Converts a trained ANN to an SNN system ready for simulation.
+# def convert_ann_to_snn_system(ann_model, 
+#                               num_steps_per_sample=1024, 
+#                               input_generator_interval=1024,
+#                               vth_mant=2**9, 
+#                               bias_exp=6, 
+#                               weight_exponent=0,
+#                               synapse_encoding='sparse',
+#                               weight_bits=8):
+#     """
+#     Converts a trained ANN to an SNN system ready for simulation.
     
-    Args:
-        ann_model (Keras Model): Trained feedforward ANN model.
-        num_steps_per_sample (int): Time steps for each input sample.
-        input_generator_interval (int): Spike interval for the input generator.
-        vth_mant (int): Threshold mantissa for spiking neurons.
-        bias_exp (int): Bias exponent for input layer and input generator.
-        weight_exponent (int): Weight exponent for SNN layers.
-        synapse_encoding (str): Encoding strategy ('sparse' or 'dense').
-        weight_bits (int): Bit precision for quantizing ANN weights.
+#     Args:
+#         ann_model (Keras Model): Trained feedforward ANN model.
+#         num_steps_per_sample (int): Time steps for each input sample.
+#         input_generator_interval (int): Spike interval for the input generator.
+#         vth_mant (int): Threshold mantissa for spiking neurons.
+#         bias_exp (int): Bias exponent for input layer and input generator.
+#         weight_exponent (int): Weight exponent for SNN layers.
+#         synapse_encoding (str): Encoding strategy ('sparse' or 'dense').
+#         weight_bits (int): Bit precision for quantizing ANN weights.
 
-    Returns:
-        Tuple[NxSystemModel, DNN, InputGenerator]: 
-            - The complete SNN system (NxSystemModel).
-            - The composable DNN object.
-            - The input generator object.
-    """
-    input_size = ann_model.input_shape[1]
+#     Returns:
+#         Tuple[NxSystemModel, DNN, InputGenerator]: 
+#             - The complete SNN system (NxSystemModel).
+#             - The composable DNN object.
+#             - The input generator object.
+#     """
+#     input_size = ann_model.input_shape[1]
     
-    # Step 1: Build SNN
-    snn_model = build_snn_from_ann(ann_model,
-                                   vth_mant=vth_mant,
-                                   bias_exp=bias_exp,
-                                   weight_exponent=weight_exponent,
-                                   synapse_encoding=synapse_encoding)
+#     # Step 1: Build SNN
+#     snn_model = build_snn_from_ann(ann_model,
+#                                    vth_mant=vth_mant,
+#                                    bias_exp=bias_exp,
+#                                    weight_exponent=weight_exponent,
+#                                    synapse_encoding=synapse_encoding)
     
-    # Step 2: Transfer weights
-    transfer_ann_weights_to_snn(ann_model, snn_model, weight_bits=weight_bits)
+#     # Step 2: Transfer weights
+#     transfer_ann_weights_to_snn(ann_model, snn_model, weight_bits=weight_bits)
     
-    # Step 3: Wrap SNN with input generator system
-    snn_system, dnn, input_gen = create_snn_system(snn_model,
-                                                   input_size=input_size,
-                                                   num_steps_per_sample=num_steps_per_sample,
-                                                   input_generator_interval=input_generator_interval,
-                                                   bias_exp=bias_exp)
+#     # Step 3: Wrap SNN with input generator system
+#     snn_system, dnn, input_gen = create_snn_system(snn_model,
+#                                                    input_shape=input_size,
+#                                                    num_steps_per_sample=num_steps_per_sample,
+#                                                    input_generator_interval=input_generator_interval,
+#                                                    bias_exp=bias_exp)
     
-    return snn_system, dnn, input_gen
+#     return snn_system, dnn, input_gen
 
-def run_snn(snn_system, dnn, input_generator, dummy_inputs, num_steps_per_sample, num_samples, 
+def run_snn(snn_system, dnn, input_generator, input_data, num_steps_per_sample, 
             batch_mode=False, batch_size=None, log=False, log_file="snn_benchmark.csv", print_summary=True):
-    """Run the SNN model with support for mini-batch inference, benchmark execution time, and log results."""
-    
+    """
+    Run the SNN model with support for mini-batch inference, benchmark execution time, and log results.
+    Handles flattening of input data if necessary for the InputGenerator.
+    """
     tStart = time.time()  # Start time logging
-    # snn_system.compile()
-    # snn_system.start(snn_system.board)
-    # tEndBoot = time.time()  # Time after boot
+    
+    num_samples = len(input_data)
+    original_shape = input_data.shape[1:] # e.g., (H, W, C) or (Features,)
+    flat_input_size = int(np.prod(original_shape))
+
+    print(f"\nPreparing to run SNN for {num_samples} samples.")
+    print(f"  Original sample shape: {original_shape}, Flattened size: {flat_input_size}")
+    print(f"  Num steps per sample: {num_steps_per_sample}")
+    print(f"  Running in {'BATCH' if batch_mode else 'SINGLE'} mode (Batch Size: {batch_size if batch_mode else 1})...")
+
+    flattened_inputs = input_data.reshape(num_samples, flat_input_size)
+    int_inputs = flattened_inputs.astype(int)
     
     snn_system.run(num_steps_per_sample * num_samples, aSync=True)
 
-    print(f"\nRunning in {'BATCH' if batch_mode else 'SINGLE'} mode (Batch Size: {batch_size if batch_mode else 1})...")
     tStartInput = time.time()  # Time before input encoding
     
     if batch_mode:
-        # scaled_inputs = (dummy_inputs * 255).astype(int)
-        int_inputs = dummy_inputs.astype(int)
-        
-        num_batches = int(np.ceil(num_samples / batch_size))  # Number of batches needed
-        
+        if batch_size is None or batch_size <= 0:
+            raise ValueError("Batch size must be a positive integer for batch mode.")
+        num_batches = int(np.ceil(num_samples / batch_size))
+        print(f"  Encoding inputs in {num_batches} batches...")
         for i in range(num_batches):
             start_idx = i * batch_size
             end_idx = min(start_idx + batch_size, num_samples)
             batch_data = int_inputs[start_idx:end_idx]
-            
-            print(f"Processing Batch {i+1}/{num_batches} ({len(batch_data)} samples)...")
-            input_generator.batchEncode(batch_data)  # Process one batch at a time
-
+            print(f"    Processing Batch {i+1}/{num_batches} ({len(batch_data)} samples)...")
+            input_generator.batchEncode(batch_data)
     else:
-        for i, sample in enumerate(dummy_inputs):
-            # scaled_sample = (sample * 255).astype(int)
-            int_inputs = sample.astype(int)
-            input_generator.encode(int_inputs)  # Process one input at a time
+        print(f"  Encoding {num_samples} inputs individually...")
+        for i, sample in enumerate(int_inputs):
+            input_generator.encode(sample)
+            if (i + 1) % 20 == 0: print(f"    Encoded {i+1}/{num_samples} samples...") # Progress indicator
             
     tEndInput = time.time()  # Time after input encoding
+    print(f"  Input encoding finished ({tEndInput - tStartInput:.4f} seconds).")
     
     print("Waiting for classification to finish...")
     tStartClassification = time.time()  # Time before readout
     snn_outputs = list(dnn.readout_channel.read(num_samples))
     tEndClassification = time.time()  # Time after readout
+    print(f"  Readout finished ({tEndClassification - tStartClassification:.4f} seconds).")
+    
     snn_system.finishRun()
     snn_system.board.disconnect()
-    
-
+    print("  SNN run finished and board disconnected.")
 
     # Print benchmark results
     if print_summary:
@@ -536,13 +552,13 @@ def run_snn(snn_system, dnn, input_generator, dummy_inputs, num_steps_per_sample
 
 class SNNConverter:
     """
-    Converts a trained Keras ANN model into a full Loihi-compatible SNN system.
+    Converts a trained Keras ANN or CNN model into a full Loihi-compatible SNN system.
     Encapsulates the system, DNN, and input generator into a single object.
+    Can also handle simple PPO MLP policies (but not PPO CNNs directly).
     """
 
     def __init__(self, ann_model, 
                  num_steps_per_sample=1024,
-                #  input_generator_interval=1024,
                  vth_mant=2**9,
                  bias_exp=6,
                  weight_exponent=0,
@@ -550,11 +566,19 @@ class SNNConverter:
                  weight_bits=8):
         """
         Initializes the SNNConverter and builds the system.
+
+        Args:
+            ann_model: Trained Keras model (ANN or CNN) or a Stable Baselines3 PPO model/policy (MLP only).
+            num_steps_per_sample (int): Time steps per sample for SNN simulation.
+            vth_mant (int): Neuron threshold mantissa.
+            bias_exp (int): Bias exponent for input layer/generator.
+            weight_exponent (int): Weight exponent for synaptic connections.
+            synapse_encoding (str): Synapse encoding scheme.
+            weight_bits (int): Bit precision for weight quantization.
         """
-        input_generator_interval=num_steps_per_sample
-        
-        self.ann_model = ann_model
+        self.ann_model = ann_model # Store original model/policy
         self.num_steps_per_sample = num_steps_per_sample
+        input_generator_interval = num_steps_per_sample
         
         if is_ppo_policy(ann_model):
             self.is_PPO=True
@@ -571,39 +595,71 @@ class SNNConverter:
             transfer_ann_weights_to_snn_PPO(policy, self.snn_model, weight_bits)
         
         else:
-            self.is_PPO=False
-            self.input_size = ann_model.input_shape[1]
+            if not isinstance(ann_model, KerasModel):
+                raise TypeError(f"Input model is not a Keras Model (type: {type(ann_model)}). Cannot perform standard conversion.")
 
-            # Build SNN
+            self.is_PPO=False
+            
+            if isinstance(ann_model.input_shape, list):
+                 self.input_shape_original = ann_model.input_shape[0][1:]
+            else:
+                 self.input_shape_original = ann_model.input_shape[1:]
+
+            if not self.input_shape_original:
+                 raise ValueError("Could not determine input shape from Keras model.")
+
+            self.input_size_flat = int(np.prod(self.input_shape_original))
+            print(f"  Keras input shape: {self.input_shape_original}, Flattened size: {self.input_size_flat}")
+            
+            # Build SNN from Keras structure (handles Dense, Conv, etc.)
             self.snn_model = build_snn_from_ann(ann_model, vth_mant, bias_exp, weight_exponent, synapse_encoding)
-        
-            # Transfer Weights
+
+            # Transfer Weights from Keras structure
             transfer_ann_weights_to_snn(ann_model, self.snn_model, weight_bits)
 
         # Create System
         self.snn_system, self.dnn, self.input_generator = create_snn_system(
             self.snn_model,
-            input_size=self.input_size,
+            input_shape=self.input_shape_original,
             num_steps_per_sample=num_steps_per_sample,
             input_generator_interval=input_generator_interval,
             bias_exp=bias_exp
         )
     
     def boot(self):
-        """Boots the SNN system."""
+        """Boots the SNN system onto the Loihi hardware/simulator."""
+        print("Booting SNN system...")
         self.snn_system.compile()
         self.snn_system.start(self.snn_system.board)
         print("SNN system booted.")
 
-    def run(self, dummy_inputs, batch_mode=False, batch_size=None, log=False, log_file="snn_benchmark.csv", print_summary=True):
-        """Runs inference on the SNN system and returns the outputs."""
+    def run(self, input_data, batch_mode=False, batch_size=None, log=False, log_file="snn_benchmark.csv", print_summary=True):
+        """
+        Runs inference on the SNN system with the given input data.
+
+        Args:
+            input_data (np.ndarray): Input samples (num_samples x H x W x C or num_samples x features).
+                                     Data should be preprocessed (e.g., scaled) as expected by the ANN.
+            batch_mode (bool): Use batch processing for input encoding.
+            batch_size (int): Size of batches if batch_mode is True.
+            log (bool): Log performance metrics to a CSV file.
+            log_file (str): Path to the log file.
+            print_summary (bool): Print performance summary to console.
+
+        Returns:
+            np.ndarray: SNN output predictions.
+        """
+        if not hasattr(self, 'snn_system') or self.snn_system is None:
+            raise RuntimeError("SNN system not initialized. Call __init__ first.")
+        if not hasattr(self.snn_system, 'board') or self.snn_system.board is None:
+             raise RuntimeError("SNN system not booted. Call boot() first.")
+         
         return run_snn(
             self.snn_system,
             self.dnn,
             self.input_generator,
-            dummy_inputs,
+            input_data,
             self.num_steps_per_sample,
-            num_samples=len(dummy_inputs),
             batch_mode=batch_mode,
             batch_size=batch_size,
             log=log,
@@ -611,31 +667,59 @@ class SNNConverter:
             print_summary=print_summary
         )
     
-    def compare_to_ann(self, inputs, batch_mode=False, batch_size=None,
+    def compare_to_ann(self, input_data, batch_mode=False, batch_size=None,
                        log=False, log_file="snn_benchmark.csv", print_summary=False):
         """
         Compares ANN outputs vs. SNN outputs using argmax and prints accuracy.
+        Requires the original ANN model to be available and runnable (e.g., Keras model).
 
         Args:
-            inputs (np.ndarray): Input samples (num_samples x input_dim).
-            scale_inputs (bool): Whether to scale inputs to [0, 255] for the ANN.
+            input_data (np.ndarray): Input samples (num_samples x ...). Should be in the format expected by the ANN.
             batch_mode (bool): Whether to run SNN in batch mode.
             batch_size (int): Batch size for SNN (only needed if batch_mode is True).
-            log (bool): Whether to log performance results.
-            log_file (str): Log file name.
-            print_summary (bool): Whether to print benchmark summary.
+            log (bool): Whether to log SNN performance results.
+            log_file (str): Log file name for SNN run.
+            print_summary (bool): Whether to print SNN benchmark summary.
+
+        Returns:
+            float: Prediction accuracy (match rate between ANN argmax and SNN output).
         """
-        ann_outputs = self.ann_model.predict(inputs)
-        ann_predictions = np.argmax(ann_outputs, axis=1)
+        
+        print("\n--- Comparing ANN vs SNN Outputs ---")
 
-        snn_outputs = self.run(inputs, batch_mode=batch_mode, batch_size=batch_size, log=log, log_file=log_file, print_summary=print_summary)
-        snn_predictions = np.array(snn_outputs)
+        print("Running ANN predictions...")
+        try:
+            ann_outputs = self.ann_model.predict(input_data)
+            ann_predictions = np.argmax(ann_outputs, axis=1)
+            print(f"  ANN Predictions (first 10): {ann_predictions[:10]}")
+        except Exception as e:
+            print(f"Error running ANN prediction: {e}")
+            return -1.0
 
-        accuracy = np.mean(ann_predictions == snn_predictions)
+        print("Running SNN predictions...")
+        try:
+            snn_outputs = self.run(input_data, batch_mode=batch_mode, batch_size=batch_size,
+                                    log=log, log_file=log_file, print_summary=print_summary)
+            
+            snn_predictions = np.array(snn_outputs)
+            print(f"  SNN Predictions (first 10): {snn_predictions[:10]}")
+        except Exception as e:
+            print(f"Error running SNN prediction: {e}")
+            return -1.0 # Indicate error
 
-        print("ANN vs SNN Comparison:")
-        print("ANN Predictions:", ann_predictions)
-        print("SNN Outputs    :", snn_predictions)
-        print(f"Accuracy      : {accuracy * 100:.2f}%")
+        # Comparison
+        if len(ann_predictions) != len(snn_predictions):
+             print(f"Error: Mismatch in number of predictions (ANN: {len(ann_predictions)}, SNN: {len(snn_predictions)})")
+             return -1.0
+
+        correct_matches = np.sum(ann_predictions == snn_predictions)
+        total_samples = len(ann_predictions)
+        accuracy = correct_matches / total_samples if total_samples > 0 else 0.0
+
+        print("\nComparison Summary:")
+        print("ANN Predictions:", ann_predictions) # Can be long
+        print("SNN Predictions:", snn_predictions)
+        print(f"Matching Predictions: {correct_matches}/{total_samples}")
+        print(f"Accuracy: {accuracy * 100:.2f}%")
 
         return accuracy

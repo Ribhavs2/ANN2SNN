@@ -550,9 +550,35 @@ def _getUniqueSourceGroups(interleavedMap, cxBaseOffsets, sizeSrcGroup,
         invIds = np.zeros(len(groups), int)
         uniqueGroups = groups[:1]
     else:
-        _, ids, invIds = np.unique(list(groupsFlat.values()), axis=axis,
-                                   return_index=True, return_inverse=True)
-        uniqueGroups = [groups[i] for i in ids]
+        # print("GroupsFlat:")
+        # print(type(groupsFlat))
+        
+        # --- START FIX ---
+        unique_patterns_dict = {}
+        unique_group_indices = []
+        invIds_list = []
+
+        group_flat_values = list(groupsFlat.values())
+
+        if len(groups) != len(group_flat_values):
+             raise RuntimeError(f"Internal inconsistency: Length mismatch between 'groups' ({len(groups)}) and 'groupsFlat' ({len(group_flat_values)}).")
+
+        for i, flat_pattern_list in enumerate(group_flat_values):
+            pattern_tuple = tuple(flat_pattern_list)
+
+            if pattern_tuple not in unique_patterns_dict:
+                unique_index = len(unique_group_indices)
+                unique_patterns_dict[pattern_tuple] = unique_index
+                
+                unique_group_indices.append(i)
+                invIds_list.append(unique_index)
+            else:
+                invIds_list.append(unique_patterns_dict[pattern_tuple])
+
+        uniqueGroups = [groups[idx] for idx in unique_group_indices]
+        invIds = np.array(invIds_list, dtype=int)
+        # --- END FIX ---
+
 
     synListPtrs = {}
     i = 0
