@@ -434,8 +434,21 @@ def compileConvlike(self, partitionCandidate):
                                                          destinationGroups)
         assert max(permutedDestCxIdxs) <= coreSizeInterleaved
 
-        permCxIdToRelCxId = np.array([np.where(permutedDestCxIdxs == i)[0]
-                                      for i in range(coreSizeInterleaved)])
+        # permCxIdToRelCxId = np.array([np.where(permutedDestCxIdxs == i)[0]
+        #                               for i in range(coreSizeInterleaved)])
+        # --- START FIX ---
+        permCxIdToRelCxId = np.full(coreSizeInterleaved, -1, dtype=int)
+
+        # 'permutedDestCxIdxs' contains the interleaved indices.
+        # The index 'rel_idx' within 'permutedDestCxIdxs' is the original relative index.
+        for rel_idx, interleaved_idx in enumerate(permutedDestCxIdxs):
+            if interleaved_idx >= coreSizeInterleaved:
+                # Safety check, should ideally not happen if coreSizeInterleaved is correct
+                raise IndexError(f"Interleaved index {interleaved_idx} is out of bounds for coreSizeInterleaved {coreSizeInterleaved}")
+            # Map: interleaved_idx -> rel_idx
+            permCxIdToRelCxId[interleaved_idx] = rel_idx
+        # --- END FIX ---
+
 
         cIdxMult = numDestinationGroups - 1
 
